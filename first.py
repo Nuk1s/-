@@ -1,4 +1,5 @@
 import os
+import json
 import threading
 from flask import Flask
 from telegram.ext import Application, ContextTypes
@@ -19,6 +20,7 @@ CONFIG = {
 class BotState:
     def __init__(self):
         self.last_video_id = None
+        self.initialized = False
 
     @classmethod
     def load(cls, filename):
@@ -27,13 +29,19 @@ class BotState:
                 data = json.load(f)
                 state = cls()
                 state.last_video_id = data.get('last_video_id')
+                state.initialized = data.get('initialized', False)
                 return state
         except (FileNotFoundError, json.JSONDecodeError):
-            return cls()
+            state = cls()
+            state.save(filename)  # Создаем файл при первом запуске
+            return state
 
     def save(self, filename):
         with open(filename, 'w') as f:
-            json.dump({'last_video_id': self.last_video_id}, f)
+            json.dump({
+                'last_video_id': self.last_video_id,
+                'initialized': self.initialized
+            }, f)
 
 youtube = build('youtube', 'v3', developerKey=CONFIG['youtube_key'])
 state = BotState.load(CONFIG['state_file'])
@@ -53,21 +61,37 @@ async def check_new_video(context: ContextTypes.DEFAULT_TYPE):
         )
         response = request.execute()
 
-        if response.get('items'):
-            video = response['items'][0]
-            current_id = video['id']['videoId']
+        if not response.get('items'):
+            return
 
-            if current_id != state.last_video_id:
-                message = f"🎥 Новое видео!\n\n{video['snippet']['title']}\n\nСсылка: https://youtu.be/{current_id}"
-                await context.bot.send_message(
-                    chat_id=CONFIG['telegram_channel'],
-                    text=message
-                )
-                state.last_video_id = current_id
-                state.save(CONFIG['state_file'])
+        video = response['items'][0]
+        current_id = video['id']['videoId']
 
+        if not state.initialized:
+            state.last_video_id = current_id
+            state.initialized = True
+            state.save(CONFIG['state_file'])
+            print("Initial state saved")
+            return
+
+        if current_id != state.last_video_id:
+            message = (
+                f"🎥 Новое видео!\n\n"
+                f"{video['snippet']['title']}\n\n"
+                f"Ссылка: https://youtu.be/{current_id}"
+            )
+            await context.bot.send_message(
+                chat_id=CONFIG['telegram_channel'],
+                text=message
+            )
+            state.last_video_id = current_id
+            state.save(CONFIG['state_file'])
+            print(f"New video detected: {current_id}")
+
+    except HttpError as e:
+        print(f"YouTube API Error: {e}")
     except Exception as e:
-        print(f"Error: {str(e)}")
+        print(f"Unexpected Error: {repr(e)}")
 
 def main():
     # Инициализация Telegram
