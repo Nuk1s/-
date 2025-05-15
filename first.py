@@ -1,5 +1,6 @@
 import os
 import json
+import signal
 import threading
 from flask import Flask
 from telegram.ext import Application, ContextTypes
@@ -10,10 +11,10 @@ app = Flask(__name__)
 
 # Конфигурация
 CONFIG = {
-    'telegram_token': os.getenv("TG_TOKEN", "8044378203:AAFNVsZlYbiF5W0SX10uxr5W3ZT-WYKpebs"),
-    'telegram_channel': os.getenv("TG_CHANNEL", "@pmchat123"),
-    'youtube_key': os.getenv("YT_KEY", "AIzaSyBYNDz9yuLS7To77AXFLcWpVf54j2GK8c8"),
-    'youtube_channel': os.getenv("YT_CHANNEL_ID", "UCW8eE7SOnIdRUmidxB--nOg"),
+    'telegram_token': os.getenv("TG_TOKEN", "ваш_токен"),
+    'telegram_channel': os.getenv("TG_CHANNEL", "@ваш_канал"),
+    'youtube_key': os.getenv("YT_KEY", "youtube_api_key"),
+    'youtube_channel': os.getenv("YT_CHANNEL_ID", "UC..."),
     'state_file': "bot_state.json",
 }
 
@@ -33,7 +34,7 @@ class BotState:
                 return state
         except (FileNotFoundError, json.JSONDecodeError):
             state = cls()
-            state.save(filename)  # Создаем файл при первом запуске
+            state.save(filename)
             return state
 
     def save(self, filename):
@@ -71,51 +72,60 @@ async def check_new_video(context: ContextTypes.DEFAULT_TYPE):
             state.last_video_id = current_id
             state.initialized = True
             state.save(CONFIG['state_file'])
-            print("Initial state saved")
             return
 
         if current_id != state.last_video_id:
-            message = (
-                f"🎥 Новое видео!\n\n"
-                f"{video['snippet']['title']}\n\n"
-                f"Ссылка: https://youtu.be/{current_id}"
-            )
+            message = f"🎥 Новое видео!\n\n{video['snippet']['title']}\n\nСсылка: https://youtu.be/{current_id}"
             await context.bot.send_message(
                 chat_id=CONFIG['telegram_channel'],
                 text=message
             )
             state.last_video_id = current_id
             state.save(CONFIG['state_file'])
-            print(f"New video detected: {current_id}")
 
-    except HttpError as e:
-        print(f"YouTube API Error: {e}")
     except Exception as e:
-        print(f"Unexpected Error: {repr(e)}")
+        print(f"Error: {str(e)}")
 
 def main():
-    # Инициализация Telegram
-    telegram_app = Application.builder().token(CONFIG['telegram_token']).build()
+    # Инициализация Telegram с явным указанием параметров
+    telegram_app = Application.builder().token(CONFIG['telegram_token']).read_timeout(30).write_timeout(30).build()
     
-    # Добавляем JobQueue
+    # Добавляем обработчики сигналов
+    def stop_handler(signum, frame):
+        print("Получен сигнал завершения")
+        telegram_app.updater.stop()
+        telegram_app.stop()
+        state.save(CONFIG['state_file'])
+        exit(0)
+
+    signal.signal(signal.SIGTERM, stop_handler)
+    signal.signal(signal.SIGINT, stop_handler)
+
+    # Настройка JobQueue
     telegram_app.job_queue.run_repeating(
         check_new_video,
         interval=600,
         first=10
     )
 
-    # Запускаем Flask в отдельном потоке
+    # Запуск Flask в отдельном потоке
     threading.Thread(
         target=lambda: app.run(
             host='0.0.0.0',
             port=int(os.environ.get('PORT', 8000)),
-            use_reloader=False
+            use_reloader=False,
+            debug=False
         ),
         daemon=True
     ).start()
 
-    # Запускаем бота
-    telegram_app.run_polling()
+    # Запуск бота с явным остановом предыдущих соединений
+    telegram_app.updater.start_polling(
+        drop_pending_updates=True,
+        timeout=30,
+        connect_timeout=10
+    )
+    telegram_app.updater.idle()
 
 if __name__ == "__main__":
     main()
