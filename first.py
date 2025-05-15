@@ -9,7 +9,6 @@ from googleapiclient.errors import HttpError
 
 app = Flask(__name__)
 
-# Конфигурация
 CONFIG = {
     'telegram_token': os.getenv("TG_TOKEN", "8044378203:AAFNVsZlYbiF5W0SX10uxr5W3ZT-WYKpebs"),
     'telegram_channel': os.getenv("TG_CHANNEL", "@pmchat123"),
@@ -96,21 +95,21 @@ def stop_handler(signum, frame):
     os._exit(0)
 
 def main():
-    # Регистрируем обработчики сигналов
     signal.signal(signal.SIGTERM, stop_handler)
     signal.signal(signal.SIGINT, stop_handler)
 
-    # Инициализация Telegram бота
+    # Инициализация с явным завершением предыдущих сессий
     telegram_app = Application.builder().token(CONFIG['telegram_token']).build()
     
-    # Настраиваем JobQueue
+    # Важно: Остановка всех предыдущих подключений
+    telegram_app.bot.delete_webhook(drop_pending_updates=True)
+    
     telegram_app.job_queue.run_repeating(
         check_new_video,
         interval=600,
         first=10
     )
 
-    # Запускаем Flask в отдельном потоке
     threading.Thread(
         target=lambda: app.run(
             host='0.0.0.0',
@@ -121,7 +120,6 @@ def main():
         daemon=True
     ).start()
 
-    # Запускаем бота с очисткой предыдущих обновлений
     telegram_app.run_polling(
         drop_pending_updates=True,
         close_loop=False
