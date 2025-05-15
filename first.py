@@ -78,16 +78,18 @@ async def check_new_video(context: ContextTypes.DEFAULT_TYPE):
 def main():
     # Запуск Flask в отдельном потоке
     import threading
-    threading.Thread(target=lambda: app.run(
-        host='0.0.0.0', 
-        port=int(os.environ.get('PORT', 8000)),
+    threading.Thread(
+        target=lambda: app.run(
+            host='0.0.0.0',
+            port=int(os.environ.get('PORT', 8000)),
+        ),
         daemon=True
     ).start()
 
     # Инициализация бота
-    app = Application.builder().token(CONFIG['telegram_token']).build()
-    app.job_queue.run_repeating(check_new_video, interval=600, first=10)
-    app.run_polling()
+    telegram_app = Application.builder().token(CONFIG['telegram_token']).build()
+    telegram_app.job_queue.run_repeating(check_new_video, interval=600, first=10)
+    telegram_app.run_polling()
 
 if __name__ == "__main__":
     main()
