@@ -1,11 +1,9 @@
 import os
 import json
 import signal
-import threading
+import requests
 from flask import Flask
-from telegram.ext import Application, ContextTypes
-from googleapiclient.discovery import build
-from googleapiclient.errors import HttpError
+from apscheduler.schedulers.background import BackgroundScheduler
 
 app = Flask(__name__)
 
@@ -41,15 +39,16 @@ class BotState:
                 'initialized': self.initialized
             }, f)
 
-youtube = build('youtube', 'v3', developerKey=CONFIG['youtube_key'])
 state = BotState.load(CONFIG['state_file'])
 
 @app.route('/')
 def home():
     return "Bot is running! Last checked: " + (state.last_video_id or "none")
 
-async def check_new_video(context: ContextTypes.DEFAULT_TYPE):
+def check_new_video():
     try:
+        from googleapiclient.discovery import build
+        youtube = build('youtube', 'v3', developerKey=CONFIG['youtube_key'])
         request = youtube.search().list(
             part="id,snippet",
             channelId=CONFIG['youtube_channel'],
@@ -78,10 +77,14 @@ async def check_new_video(context: ContextTypes.DEFAULT_TYPE):
                 f"{video['snippet']['title']}\n\n"
                 f"Ссылка: https://youtu.be/{current_id}"
             )
-            await context.bot.send_message(
-                chat_id=CONFIG['telegram_channel'],
-                text=message
-            )
+            url = f"https://api.telegram.org/bot{CONFIG['telegram_token']}/sendMessage"
+            data = {
+                'chat_id': CONFIG['telegram_channel'],
+                'text': message
+            }
+            response = requests.post(url, json=data)
+            response.raise_for_status()
+            
             state.last_video_id = current_id
             state.save(CONFIG['state_file'])
             print(f"New video detected: {current_id}")
@@ -92,38 +95,21 @@ async def check_new_video(context: ContextTypes.DEFAULT_TYPE):
 def stop_handler(signum, frame):
     print("Shutting down gracefully...")
     state.save(CONFIG['state_file'])
-    os._exit(0)
+    scheduler.shutdown()
+    exit(0)
+
+scheduler = BackgroundScheduler()
 
 def main():
     signal.signal(signal.SIGTERM, stop_handler)
     signal.signal(signal.SIGINT, stop_handler)
 
-    # Инициализация с явным завершением предыдущих сессий
-    telegram_app = Application.builder().token(CONFIG['telegram_token']).build()
-    
-    # Важно: Остановка всех предыдущих подключений
-    telegram_app.bot.delete_webhook(drop_pending_updates=True)
-    
-    telegram_app.job_queue.run_repeating(
-        check_new_video,
-        interval=600,
-        first=10
-    )
+    scheduler.add_job(check_new_video, 'interval', minutes=10)
+    scheduler.start()
 
-    threading.Thread(
-        target=lambda: app.run(
-            host='0.0.0.0',
-            port=int(os.environ.get('PORT', 8000)),
-            use_reloader=False,
-            debug=False
-        ),
-        daemon=True
-    ).start()
+    check_new_video()  # Initial check
 
-    telegram_app.run_polling(
-        drop_pending_updates=True,
-        close_loop=False
-    )
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8000)), use_reloader=False)
 
 if __name__ == "__main__":
     main()
