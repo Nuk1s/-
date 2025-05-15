@@ -87,20 +87,9 @@ async def check_new_video(context: ContextTypes.DEFAULT_TYPE):
         print(f"Error: {str(e)}")
 
 def main():
-    # Инициализация Telegram с явным указанием параметров
-    telegram_app = Application.builder().token(CONFIG['telegram_token']).read_timeout(30).write_timeout(30).build()
+    # Инициализация Telegram
+    telegram_app = Application.builder().token(CONFIG['telegram_token']).build()
     
-    # Добавляем обработчики сигналов
-    def stop_handler(signum, frame):
-        print("Получен сигнал завершения")
-        telegram_app.updater.stop()
-        telegram_app.stop()
-        state.save(CONFIG['state_file'])
-        exit(0)
-
-    signal.signal(signal.SIGTERM, stop_handler)
-    signal.signal(signal.SIGINT, stop_handler)
-
     # Настройка JobQueue
     telegram_app.job_queue.run_repeating(
         check_new_video,
@@ -113,19 +102,16 @@ def main():
         target=lambda: app.run(
             host='0.0.0.0',
             port=int(os.environ.get('PORT', 8000)),
-            use_reloader=False,
-            debug=False
+            use_reloader=False
         ),
         daemon=True
     ).start()
 
-    # Запуск бота с явным остановом предыдущих соединений
-    telegram_app.updater.start_polling(
+    # Запуск бота с правильными параметрами
+    telegram_app.run_polling(
         drop_pending_updates=True,
-        timeout=30,
-        connect_timeout=10
+        timeout=30
     )
-    telegram_app.updater.idle()
 
 if __name__ == "__main__":
     main()
