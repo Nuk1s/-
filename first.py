@@ -1,5 +1,5 @@
 import os
-import json
+import threading
 from flask import Flask
 from telegram.ext import Application, ContextTypes
 from googleapiclient.discovery import build
@@ -40,7 +40,7 @@ state = BotState.load(CONFIG['state_file'])
 
 @app.route('/')
 def home():
-    return "Bot is running! Last video: " + (state.last_video_id or "none")
+    return "Bot is running! Last checked: " + (state.last_video_id or "none")
 
 async def check_new_video(context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -58,11 +58,7 @@ async def check_new_video(context: ContextTypes.DEFAULT_TYPE):
             current_id = video['id']['videoId']
 
             if current_id != state.last_video_id:
-                message = (
-                    f"🎥 Новое видео!\n\n"
-                    f"{video['snippet']['title']}\n\n"
-                    f"Ссылка: https://youtu.be/{current_id}"
-                )
+                message = f"🎥 Новое видео!\n\n{video['snippet']['title']}\n\nСсылка: https://youtu.be/{current_id}"
                 await context.bot.send_message(
                     chat_id=CONFIG['telegram_channel'],
                     text=message
@@ -70,25 +66,31 @@ async def check_new_video(context: ContextTypes.DEFAULT_TYPE):
                 state.last_video_id = current_id
                 state.save(CONFIG['state_file'])
 
-    except HttpError as e:
-        print(f"YouTube API error: {e}")
     except Exception as e:
-        print(f"Unexpected error: {e}")
+        print(f"Error: {str(e)}")
 
 def main():
-    # Запуск Flask в отдельном потоке
-    import threading
+    # Инициализация Telegram
+    telegram_app = Application.builder().token(CONFIG['telegram_token']).build()
+    
+    # Добавляем JobQueue
+    telegram_app.job_queue.run_repeating(
+        check_new_video,
+        interval=600,
+        first=10
+    )
+
+    # Запускаем Flask в отдельном потоке
     threading.Thread(
         target=lambda: app.run(
             host='0.0.0.0',
             port=int(os.environ.get('PORT', 8000)),
+            use_reloader=False
         ),
         daemon=True
     ).start()
 
-    # Инициализация бота
-    telegram_app = Application.builder().token(CONFIG['telegram_token']).build()
-    telegram_app.job_queue.run_repeating(check_new_video, interval=600, first=10)
+    # Запускаем бота
     telegram_app.run_polling()
 
 if __name__ == "__main__":
