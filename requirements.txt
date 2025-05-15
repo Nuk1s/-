@@ -1,5 +1,6 @@
-gunicorn==21.2.0
+flask==2.3.2
 requests==2.32.3
 google-api-python-client==2.108.0
 apscheduler==3.10.1
 python-dotenv==1.0.0
+gunicorn==21.2.0
