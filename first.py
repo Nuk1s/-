@@ -11,10 +11,10 @@ app = Flask(__name__)
 
 # Конфигурация
 CONFIG = {
-    'telegram_token': os.getenv("TG_TOKEN", "ваш_токен"),
-    'telegram_channel': os.getenv("TG_CHANNEL", "@ваш_канал"),
-    'youtube_key': os.getenv("YT_KEY", "youtube_api_key"),
-    'youtube_channel': os.getenv("YT_CHANNEL_ID", "UC..."),
+    'telegram_token': os.getenv("TG_TOKEN", "8044378203:AAFNVsZlYbiF5W0SX10uxr5W3ZT-WYKpebs"),
+    'telegram_channel': os.getenv("TG_CHANNEL", "@pmchat123"),
+    'youtube_key': os.getenv("YT_KEY", "AIzaSyBYNDz9yuLS7To77AXFLcWpVf54j2GK8c8"),
+    'youtube_channel': os.getenv("YT_CHANNEL_ID", "UCW8eE7SOnIdRUmidxB--nOg"),
     'state_file': "bot_state.json",
 }
 
@@ -33,9 +33,7 @@ class BotState:
                 state.initialized = data.get('initialized', False)
                 return state
         except (FileNotFoundError, json.JSONDecodeError):
-            state = cls()
-            state.save(filename)
-            return state
+            return cls()
 
     def save(self, filename):
         with open(filename, 'w') as f:
@@ -72,45 +70,61 @@ async def check_new_video(context: ContextTypes.DEFAULT_TYPE):
             state.last_video_id = current_id
             state.initialized = True
             state.save(CONFIG['state_file'])
+            print("Initial state saved")
             return
 
         if current_id != state.last_video_id:
-            message = f"🎥 Новое видео!\n\n{video['snippet']['title']}\n\nСсылка: https://youtu.be/{current_id}"
+            message = (
+                f"🎥 Новое видео!\n\n"
+                f"{video['snippet']['title']}\n\n"
+                f"Ссылка: https://youtu.be/{current_id}"
+            )
             await context.bot.send_message(
                 chat_id=CONFIG['telegram_channel'],
                 text=message
             )
             state.last_video_id = current_id
             state.save(CONFIG['state_file'])
+            print(f"New video detected: {current_id}")
 
     except Exception as e:
         print(f"Error: {str(e)}")
 
+def stop_handler(signum, frame):
+    print("Shutting down gracefully...")
+    state.save(CONFIG['state_file'])
+    os._exit(0)
+
 def main():
-    # Инициализация Telegram
+    # Регистрируем обработчики сигналов
+    signal.signal(signal.SIGTERM, stop_handler)
+    signal.signal(signal.SIGINT, stop_handler)
+
+    # Инициализация Telegram бота
     telegram_app = Application.builder().token(CONFIG['telegram_token']).build()
     
-    # Настройка JobQueue
+    # Настраиваем JobQueue
     telegram_app.job_queue.run_repeating(
         check_new_video,
         interval=600,
         first=10
     )
 
-    # Запуск Flask в отдельном потоке
+    # Запускаем Flask в отдельном потоке
     threading.Thread(
         target=lambda: app.run(
             host='0.0.0.0',
             port=int(os.environ.get('PORT', 8000)),
-            use_reloader=False
+            use_reloader=False,
+            debug=False
         ),
         daemon=True
     ).start()
 
-    # Запуск бота с правильными параметрами
+    # Запускаем бота с очисткой предыдущих обновлений
     telegram_app.run_polling(
         drop_pending_updates=True,
-        timeout=30
+        close_loop=False
     )
 
 if __name__ == "__main__":
