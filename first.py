@@ -4,6 +4,7 @@ import signal
 import requests
 from flask import Flask
 from apscheduler.schedulers.background import BackgroundScheduler
+from googleapiclient.discovery import build
 
 app = Flask(__name__)
 
@@ -47,7 +48,6 @@ def home():
 
 def check_new_video():
     try:
-        from googleapiclient.discovery import build
         youtube = build('youtube', 'v3', developerKey=CONFIG['youtube_key'])
         request = youtube.search().list(
             part="id,snippet",
