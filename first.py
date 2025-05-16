@@ -24,12 +24,12 @@ app = Flask(__name__)
 lock = threading.Lock()
 
 class Config:
-    TG_TOKEN = os.getenv("TG_TOKEN", "ваш_токен")
-    TG_CHANNEL = os.getenv("TG_CHANNEL", "@ваш_канал")
-    YT_KEY = os.getenv("YT_KEY", "ваш_api_ключ")
-    YT_CHANNEL_ID = os.getenv("YT_CHANNEL_ID", "UCваш_id")
-    STATE_FILE = "/tmp/bot_state.json"  # Путь с правами на запись
-    CHECK_INTERVAL = 10  # Интервал проверки в минутах
+    TG_TOKEN = os.getenv("TG_TOKEN", "8044378203:AAFNVsZlYbiF5W0SX10uxr5W3ZT-WYKpebs")
+    TG_CHANNEL = os.getenv("TG_CHANNEL", "@pmchat123")
+    YT_KEY = os.getenv("YT_KEY", "AIzaSyBYNDz9yuLS7To77AXFLcWpVf54j2GK8c8")
+    YT_CHANNEL_ID = os.getenv("YT_CHANNEL_ID", "UCW8eE7SOnIdRUmidxB--nOg")
+    STATE_FILE = "bot_state.json"  # Изменил на относительный путь
+    CHECK_INTERVAL = 10
 
 class StateManager:
     def __init__(self):
@@ -111,7 +111,6 @@ def check_video_task():
     with lock:
         logger.info("Starting video check...")
         
-        # Получаем данные с YouTube
         response = YouTubeService.get_latest_video()
         if not response or not response.get('items'):
             logger.warning("No videos found")
@@ -121,7 +120,6 @@ def check_video_task():
         current_id = video['id']['videoId']
         logger.info(f"Current video ID: {current_id}")
 
-        # Обработка состояния
         state = state_manager.state
         
         if not state['initialized']:
@@ -134,13 +132,11 @@ def check_video_task():
         if current_id != state['last_video_id']:
             logger.info(f"New video detected: {current_id}")
             
-            # Формируем данные для отправки
             video_data = {
                 'id': current_id,
                 'title': video['snippet']['title']
             }
             
-            # Отправляем уведомление и обновляем состояние
             if TelegramService.send_alert(video_data):
                 state['last_video_id'] = current_id
                 state_manager.save_state()
@@ -161,24 +157,23 @@ def setup_scheduler():
     )
     return scheduler
 
+scheduler = setup_scheduler()  # Вынес инициализацию на уровень модуля
+
 def graceful_shutdown(signum, frame):
     logger.info("Shutting down...")
     scheduler.shutdown()
     state_manager.save_state()
     logger.info("Service stopped")
-    exit(0)
+
+# Регистрация обработчиков сигналов
+signal.signal(signal.SIGTERM, graceful_shutdown)
+signal.signal(signal.SIGINT, graceful_shutdown)
 
 if __name__ == "__main__":
-    # Первоначальная проверка
+    # Для локального запуска
     check_video_task()
-    
-    # Настройка планировщика
-    scheduler = setup_scheduler()
-    signal.signal(signal.SIGTERM, graceful_shutdown)
-    signal.signal(signal.SIGINT, graceful_shutdown)
-    
-    # Запуск сервисов
     scheduler.start()
-    
-    # Запуск Flask
     app.run(host='0.0.0.0', port=int(os.getenv("PORT", 8000)), use_reloader=False)
+else:
+    # Для запуска через Gunicorn
+    scheduler.start()
