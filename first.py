@@ -2,12 +2,14 @@ import os
 import json
 import signal
 import logging
+import threading
 import requests
 from flask import Flask
 from apscheduler.schedulers.background import BackgroundScheduler
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 
-# Конфигурация логирования
+# Настройка логирования
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -19,51 +21,40 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
+lock = threading.Lock()
 
-class ConfigManager:
-    @staticmethod
-    def get_config():
-        return {
-            'telegram_token': os.getenv("TG_TOKEN", "8044378203:AAFNVsZlYbiF5W0SX10uxr5W3ZT-WYKpebs"),
-            'telegram_channel': os.getenv("TG_CHANNEL", "@pmchat123"),
-            'youtube_key': os.getenv("YT_KEY", "AIzaSyBYNDz9yuLS7To77AXFLcWpVf54j2GK8c8"),
-            'youtube_channel': os.getenv("YT_CHANNEL_ID", "UCW8eE7SOnIdRUmidxB--nOg"),
-            'state_file': "/data/bot_state.json",  # Для Render Persistent Disk
-            'check_interval': 10  # Интервал проверки в минутах
-        }
-
-CONFIG = ConfigManager.get_config()
+class Config:
+    TG_TOKEN = os.getenv("TG_TOKEN", "ваш_токен")
+    TG_CHANNEL = os.getenv("TG_CHANNEL", "@ваш_канал")
+    YT_KEY = os.getenv("YT_KEY", "ваш_api_ключ")
+    YT_CHANNEL_ID = os.getenv("YT_CHANNEL_ID", "UCваш_id")
+    STATE_FILE = "/tmp/bot_state.json"  # Путь с правами на запись
+    CHECK_INTERVAL = 10  # Интервал проверки в минутах
 
 class StateManager:
-    _instance = None
-    
-    def __new__(cls):
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-            cls._instance.state = cls._load_state()
-        return cls._instance
+    def __init__(self):
+        self.state = self._load_state()
 
-    @classmethod
-    def _load_state(cls):
+    def _load_state(self):
         try:
-            with open(CONFIG['state_file'], 'r') as f:
+            with open(Config.STATE_FILE, 'r') as f:
                 data = json.load(f)
                 logger.info(f"Loaded state: {data}")
                 return {
                     'last_video_id': data.get('last_video_id'),
                     'initialized': data.get('initialized', False)
                 }
-        except (FileNotFoundError, json.JSONDecodeError) as e:
-            logger.warning(f"State initialization: {str(e)}")
+        except Exception as e:
+            logger.warning(f"State init: {str(e)}")
             return {'last_video_id': None, 'initialized': False}
 
     def save_state(self):
         try:
-            with open(CONFIG['state_file'], 'w') as f:
+            with open(Config.STATE_FILE, 'w') as f:
                 json.dump(self.state, f)
             logger.info(f"Saved state: {self.state}")
         except Exception as e:
-            logger.error(f"Failed to save state: {str(e)}")
+            logger.error(f"State save failed: {str(e)}")
 
 state_manager = StateManager()
 
@@ -71,19 +62,17 @@ state_manager = StateManager()
 def health_check():
     return {
         "status": "running",
-        "last_checked": state_manager.state['last_video_id'] or "never",
-        "youtube_channel": CONFIG['youtube_channel']
+        "last_checked": state_manager.state['last_video_id'] or "never"
     }, 200
 
-class YouTubeMonitor:
-    def __init__(self):
-        self.youtube = build('youtube', 'v3', developerKey=CONFIG['youtube_key'])
-
-    def get_latest_video(self):
+class YouTubeService:
+    @staticmethod
+    def get_latest_video():
         try:
-            request = self.youtube.search().list(
+            youtube = build('youtube', 'v3', developerKey=Config.YT_KEY)
+            request = youtube.search().list(
                 part="id,snippet",
-                channelId=CONFIG['youtube_channel'],
+                channelId=Config.YT_CHANNEL_ID,
                 maxResults=1,
                 order="date",
                 type="video"
@@ -93,68 +82,79 @@ class YouTubeMonitor:
             logger.error(f"YouTube API error: {str(e)}")
             return None
 
-class TelegramNotifier:
+class TelegramService:
     @staticmethod
-    def send_message(text):
+    def send_alert(video_data):
+        message = (
+            f"🎥 Новое видео!\n\n"
+            f"<b>{video_data['title']}</b>\n\n"
+            f"Ссылка: https://youtu.be/{video_data['id']}"
+        )
+        
         try:
-            url = f"https://api.telegram.org/bot{CONFIG['telegram_token']}/sendMessage"
-            response = requests.post(url, json={
-                'chat_id': CONFIG['telegram_channel'],
-                'text': text,
-                'parse_mode': 'HTML'
-            })
+            response = requests.post(
+                f"https://api.telegram.org/bot{Config.TG_TOKEN}/sendMessage",
+                json={
+                    'chat_id': Config.TG_CHANNEL,
+                    'text': message,
+                    'parse_mode': 'HTML'
+                },
+                timeout=10
+            )
             response.raise_for_status()
             return True
         except Exception as e:
-            logger.error(f"Telegram API error: {str(e)}")
+            logger.error(f"Telegram send failed: {str(e)}")
             return False
 
-def check_new_video():
-    logger.info("Starting video check cycle...")
-    
-    monitor = YouTubeMonitor()
-    response = monitor.get_latest_video()
-    
-    if not response or not response.get('items'):
-        logger.warning("No videos found in response")
-        return
-
-    video = response['items'][0]
-    current_id = video['id']['videoId']
-    logger.info(f"Current video ID: {current_id}")
-
-    state = state_manager.state
-
-    if not state['initialized']:
-        state['last_video_id'] = current_id
-        state['initialized'] = True
-        state_manager.save_state()
-        logger.info("Initialization completed")
-        return
-
-    if current_id != state['last_video_id']:
-        logger.info(f"New video detected: {current_id}")
+def check_video_task():
+    with lock:
+        logger.info("Starting video check...")
         
-        message = (
-            f"🎥 Новое видео на канале!\n\n"
-            f"<b>{video['snippet']['title']}</b>\n\n"
-            f"Смотреть: https://youtu.be/{current_id}"
-        )
+        # Получаем данные с YouTube
+        response = YouTubeService.get_latest_video()
+        if not response or not response.get('items'):
+            logger.warning("No videos found")
+            return
+
+        video = response['items'][0]
+        current_id = video['id']['videoId']
+        logger.info(f"Current video ID: {current_id}")
+
+        # Обработка состояния
+        state = state_manager.state
         
-        if TelegramNotifier.send_message(message):
+        if not state['initialized']:
             state['last_video_id'] = current_id
+            state['initialized'] = True
             state_manager.save_state()
+            logger.info("Initialization complete")
+            return
+
+        if current_id != state['last_video_id']:
+            logger.info(f"New video detected: {current_id}")
+            
+            # Формируем данные для отправки
+            video_data = {
+                'id': current_id,
+                'title': video['snippet']['title']
+            }
+            
+            # Отправляем уведомление и обновляем состояние
+            if TelegramService.send_alert(video_data):
+                state['last_video_id'] = current_id
+                state_manager.save_state()
+            else:
+                logger.error("Notification failed, state not updated")
         else:
-            logger.error("Message not sent, state not updated")
-    else:
-        logger.info("No new videos found")
+            logger.info("No new videos")
 
 def setup_scheduler():
     scheduler = BackgroundScheduler()
     scheduler.add_job(
-        check_new_video,
+        check_video_task,
         'interval',
-        minutes=CONFIG['check_interval'],
+        minutes=Config.CHECK_INTERVAL,
         misfire_grace_time=600,
         coalesce=True,
         max_instances=1
@@ -162,25 +162,23 @@ def setup_scheduler():
     return scheduler
 
 def graceful_shutdown(signum, frame):
-    logger.info("Received shutdown signal")
+    logger.info("Shutting down...")
     scheduler.shutdown()
     state_manager.save_state()
-    logger.info("Service stopped gracefully")
+    logger.info("Service stopped")
     exit(0)
 
 if __name__ == "__main__":
-    # Инициализация сервиса
+    # Первоначальная проверка
+    check_video_task()
+    
+    # Настройка планировщика
     scheduler = setup_scheduler()
     signal.signal(signal.SIGTERM, graceful_shutdown)
     signal.signal(signal.SIGINT, graceful_shutdown)
     
-    # Первоначальная проверка
-    check_new_video()
-    
-    # Запуск планировщика
+    # Запуск сервисов
     scheduler.start()
     
-    # Запуск Flask-сервера
-    port = int(os.environ.get('PORT', 8000))
-    logger.info(f"Starting web server on port {port}")
-    app.run(host='0.0.0.0', port=port, use_reloader=False)
+    # Запуск Flask
+    app.run(host='0.0.0.0', port=int(os.getenv("PORT", 8000)), use_reloader=False)
