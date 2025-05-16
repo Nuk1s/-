@@ -24,11 +24,11 @@ app = Flask(__name__)
 lock = threading.Lock()
 
 class Config:
-    TG_TOKEN = os.getenv("TG_TOKEN", "8044378203:AAFNVsZlYbiF5W0SX10uxr5W3ZT-WYKpebs")
-    TG_CHANNEL = os.getenv("TG_CHANNEL", "@pmchat123")
-    YT_KEY = os.getenv("YT_KEY", "AIzaSyBYNDz9yuLS7To77AXFLcWpVf54j2GK8c8")
-    YT_CHANNEL_ID = os.getenv("YT_CHANNEL_ID", "UCW8eE7SOnIdRUmidxB--nOg")
-    STATE_FILE = "bot_state.json"  # Изменил на относительный путь
+    TG_TOKEN = os.getenv("8044378203:AAFNVsZlYbiF5W0SX10uxr5W3ZT-WYKpebs")  # ЗАМЕНИТЬ НА os.getenv("TG_TOKEN")
+    TG_CHANNEL = os.getenv("@pmchat123")  # ЗАМЕНИТЬ НА os.getenv("TG_CHANNEL")
+    YT_KEY = os.getenv("AIzaSyBYNDz9yuLS7To77AXFLcWpVf54j2GK8c8")  # ЗАМЕНИТЬ НА os.getenv("YT_KEY")
+    YT_CHANNEL_ID = "UCW8eE7SOnIdRUmidxB--nOg"
+    STATE_FILE = "bot_state.json"
     CHECK_INTERVAL = 10
 
 class StateManager:
@@ -157,7 +157,7 @@ def setup_scheduler():
     )
     return scheduler
 
-scheduler = setup_scheduler()  # Вынес инициализацию на уровень модуля
+scheduler = setup_scheduler()
 
 def graceful_shutdown(signum, frame):
     logger.info("Shutting down...")
@@ -165,15 +165,12 @@ def graceful_shutdown(signum, frame):
     state_manager.save_state()
     logger.info("Service stopped")
 
-# Регистрация обработчиков сигналов
-signal.signal(signal.SIGTERM, graceful_shutdown)
-signal.signal(signal.SIGINT, graceful_shutdown)
+def create_app():
+    signal.signal(signal.SIGTERM, graceful_shutdown)
+    signal.signal(signal.SIGINT, graceful_shutdown)
+    scheduler.start()
+    check_video_task()
+    return app
 
 if __name__ == "__main__":
-    # Для локального запуска
-    check_video_task()
-    scheduler.start()
-    app.run(host='0.0.0.0', port=int(os.getenv("PORT", 8000)), use_reloader=False)
-else:
-    # Для запуска через Gunicorn
-    scheduler.start()
+    create_app().run(host='0.0.0.0', port=8000)
